@@ -9,7 +9,7 @@
 // For example l4:spam4:eggse corresponds to ['spam', 'eggs'].
 // Dictionaries are encoded as a 'd' followed by a list of alternating keys and their corresponding values followed by an 'e'. For example, d3:cow3:moo4:spam4:eggse corresponds to {'cow': 'moo', 'spam': 'eggs'} and d4:spaml1:a1:bee corresponds to {'spam': ['a', 'b']}. Keys must be strings and appear in sorted order (sorted as raw strings, not alphanumerics).
 
-const Bencode = @This();
+const Parser = @This();
 
 const std = @import("std");
 
@@ -17,12 +17,33 @@ const Allocator = std.mem.Allocator;
 
 const BufferReader = @import("./buffer_reader.zig");
 
+const Error = error{InvalidBencodePrefix};
+
 gpa: Allocator,
 
-pub fn init(gpa: Allocator) Bencode {
-    return .{ .gpa = gpa };
+/// BufferReader helper
+reader: *BufferReader,
+
+pub fn init(gpa: Allocator, reader: *BufferReader) Parser {
+    return .{ .gpa = gpa, .reader = reader };
 }
 
-// pub fn parseString(self: *Bencode) ![]const u8 {
+pub fn parse(self: *Parser) !void {
+    var reader = self.reader;
+    while (reader.peek()) |byte| {
+        switch (byte) {
+            '0'...'9' => {
+                self.parseString();
+            },
+            else => {
+                return Error.InvalidBencodePrefix;
+            },
+        }
+    } else |err| {
+        return err;
+    }
+}
 
-// }
+fn parseString(self: *Parser) ![]const u8 {
+    var reader = self.reader;
+}
