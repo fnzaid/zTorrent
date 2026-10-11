@@ -13,6 +13,9 @@ const Parser = @This();
 
 const std = @import("std");
 
+const fmt = std.fmt;
+const testing = std.testing;
+
 const Allocator = std.mem.Allocator;
 
 const BufferReader = @import("./buffer_reader.zig");
@@ -35,6 +38,9 @@ pub fn parse(self: *Parser) !void {
             '0'...'9' => {
                 self.parseString();
             },
+            'i' => {
+                self.parseInt();
+            },
             else => {
                 return Error.InvalidBencodePrefix;
             },
@@ -44,6 +50,69 @@ pub fn parse(self: *Parser) !void {
     }
 }
 
-fn parseString(self: *Parser) ![]const u8 {
-    var reader = self.reader;
+fn parseString(self: *const Parser) ![]const u8 {
+    const reader = self.reader;
+
+    const delim_offset: usize = try reader.delimOffset(':');
+    const size_bytes: []const u8 = try reader.readBytes(delim_offset - 1);
+    _ = try reader.readUint8();
+    const size: usize = try fmt.parseUnsigned(u8, size_bytes, 10);
+
+    const string: []const u8 = try reader.readBytes(size);
+    return string;
+}
+
+fn parseInt(self: *const Parser) !i64 {
+    const reader = self.reader;
+
+    _ = try reader.readUint8();
+    const delim_offset: usize = try reader.delimOffset('e');
+    const size_bytes: []const u8 = try reader.readBytes(delim_offset - 1);
+    _ = try reader.readUint8();
+    const parsed_int: i64 = try fmt.parseInt(i64, size_bytes, 10);
+
+    return parsed_int;
+}
+
+test parseString {
+    const buffer: []const u8 = "11:HelloWorld!";
+    var reader: BufferReader = .init(buffer);
+
+    const gpa = testing.allocator;
+
+    const parser: Parser = .init(gpa, &reader);
+    const string: []const u8 = try parser.parseString();
+
+    try testing.expectEqualStrings("HelloWorld!", string);
+}
+
+test "Invalid string length-prefixed" {
+    const buffer: []const u8 = "100:HelloWorld!";
+    var reader: BufferReader = .init(buffer);
+
+    const gpa = testing.allocator;
+
+    const parser: Parser = .init(gpa, &reader);
+    try testing.expectError(error.EndOfStream, parser.parseString());
+}
+
+test parseInt {
+    const buffer: []const u8 = "i123456789e";
+    var reader: BufferReader = .init(buffer);
+
+    const gpa = testing.allocator;
+
+    const parser: Parser = .init(gpa, &reader);
+    const parsed_int: i64 = try parser.parseInt();
+    try testing.expectEqual(123456789, parsed_int);
+}
+
+test "Try to parse invalid integer" {
+    const buffer: []const u8 = "i22te";
+    var reader: BufferReader = .init(buffer);
+
+    const gpa = testing.allocator;
+
+    const parser: Parser = .init(gpa, &reader);
+    try testing.expectError(error.InvalidCharacter, parser.parseInt());
 }

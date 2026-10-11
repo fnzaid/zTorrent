@@ -2,7 +2,7 @@ const BufferReader = @This();
 
 pub const Error = error{
     /// Read after buffer end.
-    ReadingOverflow,
+    EndOfStream,
 
     /// No equal delimeter found.
     NoDelimFound,
@@ -19,7 +19,7 @@ pub fn peek(self: *BufferReader) Error!u8 {
     const buff_length = self.buffer.len;
     const read_until = self.cursor + 1;
 
-    if (read_until > buff_length) return Error.ReadingOverflow;
+    if (read_until > buff_length) return Error.EndOfStream;
 
     const byte: u8 = self.buffer[self.cursor];
     return byte;
@@ -29,7 +29,7 @@ pub fn readUint8(self: *BufferReader) Error!u8 {
     const buff_length = self.buffer.len;
     const read_until = self.cursor + 1;
 
-    if (read_until > buff_length) return Error.ReadingOverflow;
+    if (read_until > buff_length) return Error.EndOfStream;
 
     const byte: []const u8 = try self.readBytes(1);
     return byte[0];
@@ -39,26 +39,27 @@ pub fn readBytes(self: *BufferReader, length: usize) Error![]const u8 {
     const buff_length = self.buffer.len;
     const read_until = self.cursor + length;
 
-    if (read_until > buff_length) return Error.ReadingOverflow;
+    if (read_until > buff_length) return Error.EndOfStream;
 
-    const data: []const u8 = self.buffer[self.cursor..length];
+    const data: []const u8 = self.buffer[self.cursor..read_until];
     self.cursor += length;
     return data;
 }
 
 pub fn delimOffset(self: *BufferReader, delim: u8) Error!usize {
     var offset: usize = 0;
+    const buffer: []const u8 = self.buffer[self.cursor..];
 
-    // TODO: i need to find a way to read each byte without getting cursor moved.
-    while (self.readUint8()) |byte| {
-        if (byte == delim) break;
-
+    for (0..buffer.len) |i| {
+        const byte = buffer[i];
         offset += 1;
-    } else |err| {
-        return err;
+
+        if (byte == delim) {
+            return offset;
+        }
     }
 
-    return offset;
+    return Error.NoDelimFound;
 }
 
 const std = @import("std");
@@ -78,7 +79,7 @@ test "Peek more than buffer length" {
 
     reader.cursor += 10;
 
-    try std.testing.expectError(Error.ReadingOverflow, reader.peek());
+    try std.testing.expectError(Error.EndOfStream, reader.peek());
 }
 
 test readUint8 {
@@ -103,5 +104,21 @@ test "Try to read more than length of buffer." {
     const buffer: []const u8 = "H";
     var reader: BufferReader = .init(buffer);
 
-    try std.testing.expectError(Error.ReadingOverflow, reader.readBytes(6));
+    try std.testing.expectError(Error.EndOfStream, reader.readBytes(6));
+}
+
+test delimOffset {
+    const buffer: []const u8 = "18:Hello...";
+    var reader: BufferReader = .init(buffer);
+
+    const offset: usize = try reader.delimOffset(':');
+    try std.testing.expectEqual(3, offset);
+    try std.testing.expectEqual(0, reader.cursor);
+}
+
+test "Try with no delim string." {
+    const buffer: []const u8 = "NoDelimString";
+    var reader: BufferReader = .init(buffer);
+
+    try std.testing.expectError(Error.NoDelimFound, reader.delimOffset(':'));
 }
