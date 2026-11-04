@@ -104,11 +104,10 @@ pub fn field(comptime F: type, arena: mem.Allocator, v: Value) !F {
                 return error.InvalidString;
             },
         },
-        .@"struct" => |s| {
-            const ArrayList = @typeInfo(std.ArrayList([]const u8)).@"struct";
+        .@"struct" => {
 
             // I don't have any other idea to know, this sturct was a ArrayList.
-            if (std.meta.eql(s, ArrayList)) {
+            if (@hasField(F, "items") and @hasField(F, "capacity")) {
                 var arr_list: std.ArrayList([]const u8) = .empty;
 
                 for (0..v.list.len) |i| {
@@ -121,7 +120,8 @@ pub fn field(comptime F: type, arena: mem.Allocator, v: Value) !F {
 
                 return arr_list;
             }
-            return error.Nothing;
+
+            return error.NeedToHaveAThink;
         },
         else => {
             return error.InvalidType;
@@ -155,6 +155,13 @@ pub fn decode(comptime T: type, arena: mem.Allocator, r: *io.Reader) !T {
 const Bencode = struct {
     announce: []const u8,
     @"announce-list": std.ArrayList([]const u8),
+    info: Info,
+
+    const Info = struct {
+        /// Suggested name to save the file.
+        name: []const u8,
+        @"piece length": u64,
+    };
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -174,6 +181,7 @@ pub fn main(init: std.process.Init) !void {
     for (bencode.@"announce-list".items, 0..) |list, i| {
         std.debug.print("{d}: Annoucne List: {s}\n", .{ i, list });
     }
+    std.debug.print("Piece Length: {d}\n", .{bencode.info.@"piece length"});
 
     //    const parsed_str: Value = try value(gpa, &reader);
     //    const parsed_num: Value = try value(gpa, &reader);
