@@ -53,6 +53,8 @@ pub fn value(arena: mem.Allocator, r: *io.Reader) !Value {
                 arena,
                 try value(arena, r),
             );
+            _ = try r.takeByte();
+
             return .{
                 .list = list.items,
             };
@@ -69,6 +71,8 @@ pub fn value(arena: mem.Allocator, r: *io.Reader) !Value {
                     try value(arena, r),
                 );
             }
+            _ = try r.takeByte();
+
             return .{ .dict = dict };
         },
         else => {
@@ -84,11 +88,40 @@ pub fn field(comptime F: type, arena: mem.Allocator, v: Value) !F {
         },
         .pointer => |p| switch (p.size) {
             .slice => {
-                return try arena.dupe(u8, v.string);
+                switch (v) {
+                    .list => {
+                        return try field(F, arena, v.list[0]);
+                    },
+                    .string => {
+                        return try arena.dupe(u8, v.string);
+                    },
+                    else => {
+                        return error.InvalidField;
+                    },
+                }
             },
             else => {
                 return error.InvalidString;
             },
+        },
+        .@"struct" => |s| {
+            const ArrayList = @typeInfo(std.ArrayList([]const u8)).@"struct";
+
+            // I don't have any other idea to know, this sturct was a ArrayList.
+            if (std.meta.eql(s, ArrayList)) {
+                var arr_list: std.ArrayList([]const u8) = .empty;
+
+                for (0..v.list.len) |i| {
+                    const val = try field([]const u8, arena, v.list[i]);
+                    try arr_list.append(
+                        arena,
+                        val,
+                    );
+                }
+
+                return arr_list;
+            }
+            return error.Nothing;
         },
         else => {
             return error.InvalidType;
@@ -121,6 +154,7 @@ pub fn decode(comptime T: type, arena: mem.Allocator, r: *io.Reader) !T {
 
 const Bencode = struct {
     announce: []const u8,
+    @"announce-list": std.ArrayList([]const u8),
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -137,6 +171,9 @@ pub fn main(init: std.process.Init) !void {
     const bencode: Bencode = try decode(Bencode, allocator, &reader);
 
     std.debug.print("Announce: {s}\n", .{bencode.announce});
+    for (bencode.@"announce-list".items, 0..) |list, i| {
+        std.debug.print("{d}: Annoucne List: {s}\n", .{ i, list });
+    }
 
     //    const parsed_str: Value = try value(gpa, &reader);
     //    const parsed_num: Value = try value(gpa, &reader);
@@ -150,4 +187,19 @@ pub fn main(init: std.process.Init) !void {
     //    });
     // std.debug.print("Dict: {s}\n", .{parsed_dict.dict.get("name").?.string});
     // std.debug.print("TypeInfo: \n : {any}", .{@TypeOf(parsed_dict)});
+}
+
+test "Parse List of lists" {
+    const gpa = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const test_content: []const u8 = "ll5:Helloee";
+    var reader: io.Reader = .fixed(test_content);
+
+    const bencode_value = try value(allocator, &reader);
+
+    try std.testing.expectEqualSlices(u8, "Hello", bencode_value.list[0].list[0].string);
 }
