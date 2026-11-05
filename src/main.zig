@@ -4,16 +4,13 @@ const io = std.Io;
 const mem = std.mem;
 const fmt = std.fmt;
 
-// i need something in middle, like after parsing from bencode and before parsing to struct.
-// What was i need to build in middle ?
-//      - from(Value) -> decode -> Where capture dict and do shit like innerParse from std.json look there.
 const Value = union(enum) {
-    const Dict = std.array_hash_map.String(Value);
-
-    number: i64,
+    number: u64,
     string: []const u8,
     list: []Value,
     dict: Dict,
+
+    const Dict = std.array_hash_map.String(Value);
 };
 
 pub fn value(arena: mem.Allocator, r: *io.Reader) !Value {
@@ -23,7 +20,7 @@ pub fn value(arena: mem.Allocator, r: *io.Reader) !Value {
             _ = try r.takeByte();
 
             const string = try r.take(try fmt.parseInt(
-                usize,
+                u64,
                 length_raw,
                 10,
             ));
@@ -36,8 +33,8 @@ pub fn value(arena: mem.Allocator, r: *io.Reader) !Value {
             const number_raw = try r.takeDelimiterExclusive('e');
             _ = try r.takeByte();
 
-            const number: i64 = try fmt.parseInt(
-                i64,
+            const number: u64 = try fmt.parseInt(
+                u64,
                 number_raw,
                 10,
             );
@@ -108,9 +105,11 @@ pub fn field(comptime F: type, arena: mem.Allocator, v: Value) !F {
 
             // I don't have any other idea to know, this sturct was a ArrayList.
             if (@hasField(F, "items") and @hasField(F, "capacity")) {
-                var arr_list: std.ArrayList([]const u8) = .empty;
+                var arr_list: F = .empty; // this will be a ArrayList
 
                 for (0..v.list.len) |i| {
+                    // TODO: if first field is slice of `T`, then iterate it ... Tmrw need to process ts.
+                    @compileLog("Type:", @typeInfo(F));
                     const val = try field([]const u8, arena, v.list[i]);
                     try arr_list.append(
                         arena,
@@ -121,7 +120,10 @@ pub fn field(comptime F: type, arena: mem.Allocator, v: Value) !F {
                 return arr_list;
             }
 
-            return error.NeedToHaveAThink;
+            return try decode(F, arena, v);
+        },
+        .optional => {
+            unreachable;
         },
         else => {
             return error.InvalidType;
@@ -129,18 +131,23 @@ pub fn field(comptime F: type, arena: mem.Allocator, v: Value) !F {
     }
 }
 
-pub fn decode(comptime T: type, arena: mem.Allocator, r: *io.Reader) !T {
+pub fn decode(comptime T: type, arena: mem.Allocator, parsed_value: Value) !T {
     const info = @typeInfo(T).@"struct";
     var out: T = undefined;
-    const parsed_value = try value(arena, r);
 
     switch (parsed_value) {
         .dict => |d| {
             for (d.keys(), d.values()) |k, v| {
                 inline for (info.field_names, info.field_types) |n, F| {
-                    if (std.mem.eql(u8, k, n)) {
-                        @field(out, n) = try field(F, arena, v);
+                    if (!std.mem.eql(u8, k, n)) {
+                        comptime continue;
                     }
+
+                    if (@typeInfo(F) == .optional) {
+                        @field(out, n) = try field(@typeInfo(F).optional.child, arena, v);
+                    }
+
+                    @field(out, n) = try field(F, arena, v);
                 }
             }
         },
@@ -158,9 +165,16 @@ const Bencode = struct {
     info: Info,
 
     const Info = struct {
-        /// Suggested name to save the file.
         name: []const u8,
         @"piece length": u64,
+        pieces: []const u8,
+        length: ?u64,
+        files: ?std.ArrayList(File),
+
+        const File = struct {
+            length: u64,
+            path: std.ArrayList([]const u8),
+        };
     };
 };
 
@@ -175,14 +189,17 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(file_buffer);
 
     var reader: io.Reader = .fixed(file_buffer);
-    const bencode: Bencode = try decode(Bencode, allocator, &reader);
+    const parsed_value: Value = try value(allocator, &reader);
+    const bencode: Bencode = try decode(Bencode, allocator, parsed_value);
 
     std.debug.print("Announce: {s}\n", .{bencode.announce});
     for (bencode.@"announce-list".items, 0..) |list, i| {
         std.debug.print("{d}: Annoucne List: {s}\n", .{ i, list });
     }
     std.debug.print("Piece Length: {d}\n", .{bencode.info.@"piece length"});
+    std.debug.print("Piece: {s}\n", .{bencode.info.pieces});
 
+    //  std.debug.print("Files Length: {d}\n", .{bencode.info.files.?.items[0].length});
     //    const parsed_str: Value = try value(gpa, &reader);
     //    const parsed_num: Value = try value(gpa, &reader);
     //    const parsed_list: Value = try value(gpa, &reader);
