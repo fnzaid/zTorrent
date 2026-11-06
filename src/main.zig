@@ -108,13 +108,19 @@ pub fn field(comptime F: type, arena: mem.Allocator, v: Value) !F {
                 var arr_list: F = .empty; // this will be a ArrayList
 
                 for (0..v.list.len) |i| {
-                    // TODO: if first field is slice of `T`, then iterate it ... Tmrw need to process ts.
-                    @compileLog("Type:", @typeInfo(F));
-                    const val = try field([]const u8, arena, v.list[i]);
-                    try arr_list.append(
-                        arena,
-                        val,
-                    );
+                    const active_tag = std.meta.activeTag(v.list[i]);
+
+                    switch (active_tag) {
+                        .list => {},
+                        .string => {
+                            const val = try field([]const u8, arena, v.list[i]);
+                            try arr_list.append(
+                                arena,
+                                val,
+                            );
+                        },
+                        else => {},
+                    }
                 }
 
                 return arr_list;
