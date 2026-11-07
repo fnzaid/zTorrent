@@ -65,17 +65,19 @@ pub const Value = union(enum) {
             else => unreachable,
         };
     }
-};
 
-pub fn mapField(
-    comptime T: type,
-    allocator: Allocator,
-    raw_value: Value,
-) !T {
-    _ = allocator;
-    _ = raw_value;
-    return T;
-}
+    pub fn mapField(
+        self: Value,
+        comptime T: type,
+        _: Allocator,
+    ) !T {
+        return switch (self) {
+            .dict => {},
+            .list => {},
+            else => {},
+        };
+    }
+};
 
 test "Parse raw buffers to value." {
     const gpa = std.testing.allocator;
