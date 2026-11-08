@@ -72,14 +72,14 @@ pub const Value = union(enum) {
         allocator: Allocator,
     ) !T {
         const type_info = @typeInfo(T);
-        const out: T = undefined;
+        var out: T = undefined;
 
         switch (self) {
             .dict => |d| {
                 const field_names = type_info.@"struct".field_names;
                 const field_types = type_info.@"struct".field_types;
 
-                for (field_names, field_types) |f_name, f_type| {
+                inline for (field_names, field_types) |f_name, f_type| {
                     if (d.get(f_name)) |value| {
                         @field(out, f_name) = try unwrapFieldValue(f_type, allocator, value);
                     }
@@ -123,6 +123,7 @@ pub const Value = union(enum) {
                 },
                 false => error.InvalidType,
             },
+            .@"struct" => try v.mapField(T, allocator),
             else => @panic("TODO: Received value unimplemented type."),
         };
     }
@@ -194,7 +195,76 @@ test "Parse raw buffers to Value." {
     }
 }
 
-// TODO: Write test for mapField
+test "Map struct field to matching Value" {
+    const gpa = std.testing.allocator;
+    var arena: ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const Like = struct {
+        Food: []const u8,
+        Sports: [][]const u8,
+    };
+
+    const Person = struct {
+        Name: []const u8,
+        Age: i64,
+        Drive: []const []const u8,
+        Like: Like,
+    };
+
+    var person_dict: StringHashMap(Value) = .init(allocator);
+    try person_dict.put("Name", Value{ .string = "Zaid" });
+    try person_dict.put("Age", Value{ .integer = 18 });
+    try person_dict.put("Drive", Value{
+        .list = &[_]Value{
+            .{ .string = "Bike" },
+        },
+    });
+
+    var like_dict: StringHashMap(Value) = .init(allocator);
+    try like_dict.put("Food", Value{ .string = "StringHoppers" });
+    try like_dict.put("Sports", Value{
+        .list = &[_]Value{
+            .{
+                .string = "Football",
+            },
+            .{
+                .string = "Cricket",
+            },
+            .{
+                .string = "Badminton",
+            },
+        },
+    });
+
+    try person_dict.put("Like", .{ .dict = like_dict });
+
+    const parsed_value: Value = .{ .dict = person_dict };
+    const out = try parsed_value.mapField(Person, allocator);
+
+    // Person test.
+    try std.testing.expectEqualStrings("Zaid", out.Name);
+    try std.testing.expectEqual(18, out.Age);
+    try std.testing.expectEqual(1, out.Drive.len);
+    try std.testing.expectEqualStrings("Bike", out.Drive[0]);
+
+    // Like test.
+    const like_out = out.Like;
+
+    try std.testing.expectEqualStrings("StringHoppers", like_out.Food);
+    try std.testing.expectEqual(3, like_out.Sports.len);
+    try std.testing.expectEqualSlices(
+        []const u8,
+        &[_][]const u8{
+            "Football",
+            "Cricket",
+            "Badminton",
+        },
+        like_out.Sports,
+    );
+}
 
 test "Parse Value to zig type" {
     const gpa = std.testing.allocator;
