@@ -10,7 +10,7 @@ const Dict = StringHashMap(Value);
 pub const Value = union(enum) {
     integer: i64,
     string: []const u8,
-    list: []Value,
+    list: []const Value,
     dict: Dict,
 
     pub fn parseRawBuffer(allocator: Allocator, reader: *Reader) !Value {
@@ -46,7 +46,7 @@ pub const Value = union(enum) {
                 }
                 _ = try reader.takeByte();
 
-                return .{ .list = list.items };
+                return .{ .list = try list.toOwnedSlice(allocator) };
             },
             'd' => {
                 var hash_map: StringHashMap(Value) = .init(allocator);
@@ -67,19 +67,68 @@ pub const Value = union(enum) {
     }
 
     pub fn mapField(
-        self: Value,
+        self: @This(),
         comptime T: type,
-        _: Allocator,
+        allocator: Allocator,
     ) !T {
-        return switch (self) {
-            .dict => {},
-            .list => {},
-            else => {},
+        const type_info = @typeInfo(T);
+        const out: T = undefined;
+
+        switch (self) {
+            .dict => |d| {
+                const field_names = type_info.@"struct".field_names;
+                const field_types = type_info.@"struct".field_types;
+
+                for (field_names, field_types) |f_name, f_type| {
+                    if (d.get(f_name)) |value| {
+                        @field(out, f_name) = try unwrapFieldValue(f_type, allocator, value);
+                    }
+                }
+            },
+            else => unreachable,
+        }
+
+        return out;
+    }
+
+    fn unwrapFieldValue(comptime T: type, allocator: Allocator, v: Value) !T {
+        return switch (@typeInfo(T)) {
+            .pointer => |p| switch (p.size) {
+                .slice => switch (p.child) {
+                    u8 => switch (v) {
+                        .string => |s| s,
+                        else => error.InvalidType,
+                    },
+                    else => switch (v) {
+                        .list => |l| {
+                            var array_list: std.ArrayList(p.child) = .empty;
+
+                            for (l) |val| {
+                                try array_list.append(
+                                    allocator,
+                                    try unwrapFieldValue(p.child, allocator, val),
+                                );
+                            }
+
+                            return try array_list.toOwnedSlice(allocator);
+                        },
+                        else => error.InvalidType,
+                    },
+                },
+                else => error.InvalidType,
+            },
+            .int => |i| switch (i.signedness == .signed and i.bits == 64) {
+                true => {
+                    return v.integer;
+                },
+                false => error.InvalidType,
+            },
+            else => @panic("TODO: Received value unimplemented type."),
         };
     }
 };
 
-test "Parse raw buffers to value." {
+test "Parse raw buffers to Value." {
     const gpa = std.testing.allocator;
     var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -87,6 +136,7 @@ test "Parse raw buffers to value." {
     const allocator = arena.allocator();
 
     var reader: Reader = undefined;
+
     {
         const buffer: []const u8 = "i18e";
         reader = .fixed(buffer);
@@ -141,5 +191,41 @@ test "Parse raw buffers to value." {
 
         try std.testing.expectEqualStrings("SriLanka", dict.get("Country").?.string);
         try std.testing.expectEqual(94, dict.get("CountryCode").?.integer);
+    }
+}
+
+// TODO: Write test for mapField
+
+test "Parse Value to zig type" {
+    const gpa = std.testing.allocator;
+    var arena: ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    {
+        const parsed_value: Value = .{ .string = "SriLanka" };
+        const unwrapped_value = try Value.unwrapFieldValue([]const u8, allocator, parsed_value);
+
+        try std.testing.expectEqualStrings("SriLanka", unwrapped_value);
+    }
+    {
+        const parsed_value: Value = .{ .integer = 1948 };
+        const unwrapped_value = try Value.unwrapFieldValue(i64, allocator, parsed_value);
+
+        try std.testing.expectEqual(1948, unwrapped_value);
+    }
+    {
+        var value_list: [2]Value = .{
+            .{ .string = "Sri" },
+            .{ .string = "Lanka" },
+        };
+
+        const parsed_value: Value = .{ .list = &value_list };
+        const unwrapped_value = try Value.unwrapFieldValue([][]const u8, allocator, parsed_value);
+
+        try std.testing.expectEqual(2, unwrapped_value.len);
+        try std.testing.expectEqualStrings("Sri", unwrapped_value[0]);
+        try std.testing.expectEqualStrings("Lanka", unwrapped_value[1]);
     }
 }
