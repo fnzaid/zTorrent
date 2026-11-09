@@ -29,15 +29,19 @@ pub fn parse(
 
 test parse {
     const gpa = std.testing.allocator;
+    const io = std.testing.io;
     var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
 
     const allocator = arena.allocator();
 
-    const buffer: []const u8 = "d8:announce17:https://test.teste";
-    var reader: Reader = .fixed(buffer);
+    const cwd = std.Io.Dir.cwd();
+    const file_buffer = try cwd.readFileAlloc(io, "example-torrent/tiny-iso-test_archive.torrent", gpa, .unlimited);
+    defer gpa.free(file_buffer);
+
+    var reader: Reader = .fixed(file_buffer);
 
     const bencode = try parse(allocator, &reader);
 
-    try std.testing.expectEqualStrings("https://test.test", bencode.announce);
+    try std.testing.expectEqualStrings("http://bt1.archive.org:6969/announce", bencode.announce);
 }

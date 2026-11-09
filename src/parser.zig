@@ -48,7 +48,7 @@ pub const Value = union(enum) {
                     },
                     else => switch (v) {
                         .list => |l| {
-                            var slice = try allocator.alloc(p.child, l.len);
+                            const slice: []p.child = try allocator.alloc(p.child, l.len);
 
                             for (l, 0..) |val, i| {
                                 slice[i] = try unwrapFieldValue(p.child, allocator, val);
