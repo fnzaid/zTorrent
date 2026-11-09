@@ -13,59 +13,6 @@ pub const Value = union(enum) {
     list: []const Value,
     dict: Dict,
 
-    pub fn parseRawBuffer(allocator: Allocator, reader: *Reader) !Value {
-        return switch (try reader.peekByte()) {
-            '0'...'9' => {
-                const raw_string_size: []u8 = try reader.takeDelimiterExclusive(':');
-                const string_size: usize = try std.fmt.parseInt(usize, raw_string_size, 10);
-                _ = try reader.takeByte(); // Skip the  ':' delim.
-
-                const string: []u8 = try reader.take(string_size);
-                return .{
-                    .string = string,
-                };
-            },
-            'i' => {
-                _ = try reader.takeByte();
-                const raw_int: []u8 = try reader.takeDelimiterExclusive('e');
-                const parsed_int: i64 = try std.fmt.parseInt(i64, raw_int, 10);
-                _ = try reader.takeByte(); // Skip the 'e' delim.
-
-                return .{
-                    .integer = parsed_int,
-                };
-            },
-            'l' => {
-                var list: ArrayList(Value) = .empty;
-
-                _ = try reader.takeByte();
-
-                while (try reader.peekByte() != 'e') {
-                    const value = try parseRawBuffer(allocator, reader);
-                    try list.append(allocator, value);
-                }
-                _ = try reader.takeByte();
-
-                return .{ .list = try list.toOwnedSlice(allocator) };
-            },
-            'd' => {
-                var hash_map: StringHashMap(Value) = .init(allocator);
-                _ = try reader.takeByte();
-
-                while (try reader.peekByte() != 'e') {
-                    const key: []const u8 = (try parseRawBuffer(allocator, reader)).string;
-                    const value: Value = try parseRawBuffer(allocator, reader);
-
-                    try hash_map.put(key, value);
-                }
-                _ = try reader.takeByte();
-
-                return .{ .dict = hash_map };
-            },
-            else => unreachable,
-        };
-    }
-
     pub fn mapField(
         self: @This(),
         comptime T: type,
@@ -101,16 +48,13 @@ pub const Value = union(enum) {
                     },
                     else => switch (v) {
                         .list => |l| {
-                            var array_list: std.ArrayList(p.child) = .empty;
+                            var slice = try allocator.alloc(p.child, l.len);
 
-                            for (l) |val| {
-                                try array_list.append(
-                                    allocator,
-                                    try unwrapFieldValue(p.child, allocator, val),
-                                );
+                            for (l, 0..) |val, i| {
+                                slice[i] = try unwrapFieldValue(p.child, allocator, val);
                             }
 
-                            return try array_list.toOwnedSlice(allocator);
+                            return slice;
                         },
                         else => error.InvalidType,
                     },
@@ -129,6 +73,59 @@ pub const Value = union(enum) {
     }
 };
 
+pub fn parseRawBuffer(allocator: Allocator, reader: *Reader) !Value {
+    return switch (try reader.peekByte()) {
+        '0'...'9' => {
+            const raw_string_size: []u8 = try reader.takeDelimiterExclusive(':');
+            const string_size: usize = try std.fmt.parseInt(usize, raw_string_size, 10);
+            _ = try reader.takeByte(); // Skip the  ':' delim.
+
+            const string: []u8 = try reader.take(string_size);
+            return .{
+                .string = string,
+            };
+        },
+        'i' => {
+            _ = try reader.takeByte();
+            const raw_int: []u8 = try reader.takeDelimiterExclusive('e');
+            const parsed_int: i64 = try std.fmt.parseInt(i64, raw_int, 10);
+            _ = try reader.takeByte(); // Skip the 'e' delim.
+
+            return .{
+                .integer = parsed_int,
+            };
+        },
+        'l' => {
+            var list: ArrayList(Value) = .empty;
+
+            _ = try reader.takeByte();
+
+            while (try reader.peekByte() != 'e') {
+                const value = try parseRawBuffer(allocator, reader);
+                try list.append(allocator, value);
+            }
+            _ = try reader.takeByte();
+
+            return .{ .list = try list.toOwnedSlice(allocator) };
+        },
+        'd' => {
+            var hash_map: StringHashMap(Value) = .init(allocator);
+            _ = try reader.takeByte();
+
+            while (try reader.peekByte() != 'e') {
+                const key: []const u8 = (try parseRawBuffer(allocator, reader)).string;
+                const value: Value = try parseRawBuffer(allocator, reader);
+
+                try hash_map.put(key, value);
+            }
+            _ = try reader.takeByte();
+
+            return .{ .dict = hash_map };
+        },
+        else => unreachable,
+    };
+}
+
 test "Parse raw buffers to Value." {
     const gpa = std.testing.allocator;
     var arena: ArenaAllocator = .init(gpa);
@@ -142,21 +139,21 @@ test "Parse raw buffers to Value." {
         const buffer: []const u8 = "i18e";
         reader = .fixed(buffer);
 
-        const parsed_value = try Value.parseRawBuffer(allocator, &reader);
+        const parsed_value = try parseRawBuffer(allocator, &reader);
         try std.testing.expectEqual(18, parsed_value.integer);
     }
     {
         const buffer: []const u8 = "8:SriLanka";
         reader = .fixed(buffer);
 
-        const parsed_value = try Value.parseRawBuffer(allocator, &reader);
+        const parsed_value = try parseRawBuffer(allocator, &reader);
         try std.testing.expectEqualStrings("SriLanka", parsed_value.string);
     }
     {
         const buffer: []const u8 = "l3:Sri5:Lankae";
         reader = .fixed(buffer);
 
-        const parsed_value = try Value.parseRawBuffer(allocator, &reader);
+        const parsed_value = try parseRawBuffer(allocator, &reader);
         try std.testing.expectEqual(2, parsed_value.list.len);
         try std.testing.expectEqualStrings("Sri", parsed_value.list[0].string);
         try std.testing.expectEqualStrings("Lanka", parsed_value.list[1].string);
@@ -165,7 +162,7 @@ test "Parse raw buffers to Value." {
         const buffer: []const u8 = "d7:Country8:SriLankae";
         reader = .fixed(buffer);
 
-        const parsed_value = try Value.parseRawBuffer(allocator, &reader);
+        const parsed_value = try parseRawBuffer(allocator, &reader);
         const has_key = parsed_value.dict.contains("Country");
 
         try std.testing.expectEqual(true, has_key);
@@ -175,7 +172,7 @@ test "Parse raw buffers to Value." {
         const buffer: []const u8 = "d7:Country8:SriLanka5:Foodsl5:Kottu11:Pol sambola8:Kiribathe11:CountryCodei94ee";
         reader = .fixed(buffer);
 
-        const parsed_value = try Value.parseRawBuffer(allocator, &reader);
+        const parsed_value = try parseRawBuffer(allocator, &reader);
         const dict = parsed_value.dict;
 
         const has_country_key: bool = dict.contains("Country");
