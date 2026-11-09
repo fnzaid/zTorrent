@@ -11,7 +11,10 @@ const Parser = @import("parser.zig");
 const Value = @import("parser.zig").Value;
 
 announce: []const u8,
-@"announce list": []const []const u8,
+@"announce-list": []const []const u8,
+comment: []const u8,
+@"created by": []const u8,
+@"creation date": i64,
 info: Info,
 
 const Info = struct {

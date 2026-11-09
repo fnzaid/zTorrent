@@ -44,7 +44,14 @@ pub const Value = union(enum) {
                 .slice => switch (p.child) {
                     u8 => switch (v) {
                         .string => |s| s,
-                        else => error.InvalidType,
+                        .list => |l| {
+                            if (std.meta.activeTag(l[0]) != .string) {
+                                unreachable;
+                            }
+
+                            return l[0].string;
+                        },
+                        else => error.InvalidStringType,
                     },
                     else => switch (v) {
                         .list => |l| {
@@ -56,16 +63,19 @@ pub const Value = union(enum) {
 
                             return slice;
                         },
-                        else => error.InvalidType,
+                        else => error.InvalidSliceType,
                     },
                 },
-                else => error.InvalidType,
+                else => error.InvalidPointerType,
             },
             .int => |i| switch (i.signedness == .signed and i.bits == 64) {
                 true => {
                     return v.integer;
                 },
-                false => error.InvalidType,
+                false => {
+                    std.debug.print("Int: {any}\n", .{i});
+                    return error.InvalidIntegerType;
+                },
             },
             .@"struct" => try v.mapField(T, allocator),
             else => @panic("TODO: Received value unimplemented type."),
