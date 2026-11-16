@@ -11,6 +11,8 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = true,
+        .use_lld = true,
     });
 
     b.installArtifact(exe);
@@ -18,6 +20,7 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the code.");
 
     const run_cmd = b.addRunArtifact(exe);
+    run_cmd.addPassthruArgs();
     run_step.dependOn(&run_cmd.step);
 
     run_cmd.step.dependOn(b.getInstallStep());

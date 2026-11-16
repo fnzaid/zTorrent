@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const Reader = std.Io.Reader;
@@ -19,7 +20,7 @@ pub const Value = union(enum) {
         allocator: Allocator,
     ) !T {
         const type_info = @typeInfo(T);
-        var out: T = undefined;
+        var out: T = .empty;
 
         switch (self) {
             .dict => |d| {
@@ -88,7 +89,7 @@ pub fn parseRawBuffer(allocator: Allocator, reader: *Reader) !Value {
         '0'...'9' => {
             const raw_string_size: []u8 = try reader.takeDelimiterExclusive(':');
             const string_size: usize = try std.fmt.parseInt(usize, raw_string_size, 10);
-            _ = try reader.takeByte(); // Skip the  ':' delim.
+            _ = try reader.discardShort(1);
 
             const string: []u8 = try reader.take(string_size);
             return .{
@@ -96,10 +97,10 @@ pub fn parseRawBuffer(allocator: Allocator, reader: *Reader) !Value {
             };
         },
         'i' => {
-            _ = try reader.takeByte();
+            _ = try reader.discardShort(1);
             const raw_int: []u8 = try reader.takeDelimiterExclusive('e');
             const parsed_int: i64 = try std.fmt.parseInt(i64, raw_int, 10);
-            _ = try reader.takeByte(); // Skip the 'e' delim.
+            _ = try reader.discardShort(1);
 
             return .{
                 .integer = parsed_int,
@@ -108,19 +109,19 @@ pub fn parseRawBuffer(allocator: Allocator, reader: *Reader) !Value {
         'l' => {
             var list: ArrayList(Value) = .empty;
 
-            _ = try reader.takeByte();
+            _ = try reader.discardShort(1);
 
             while (try reader.peekByte() != 'e') {
                 const value = try parseRawBuffer(allocator, reader);
                 try list.append(allocator, value);
             }
-            _ = try reader.takeByte();
+            _ = try reader.discardShort(1);
 
             return .{ .list = try list.toOwnedSlice(allocator) };
         },
         'd' => {
             var hash_map: StringHashMap(Value) = .init(allocator);
-            _ = try reader.takeByte();
+            _ = try reader.discardShort(1);
 
             while (try reader.peekByte() != 'e') {
                 const key: []const u8 = (try parseRawBuffer(allocator, reader)).string;
@@ -128,12 +129,42 @@ pub fn parseRawBuffer(allocator: Allocator, reader: *Reader) !Value {
 
                 try hash_map.put(key, value);
             }
-            _ = try reader.takeByte();
+            _ = try reader.discardShort(1);
 
             return .{ .dict = hash_map };
         },
         else => unreachable,
     };
+}
+
+pub fn extractRawInfoBytes(reader: *Reader) ![]u8 {
+    const key: []const u8 = "4:info";
+    const key_index = std.mem.find(u8, reader.buffer, key) orelse return error.InfoNotFound;
+
+    reader.seek = key_index + key.len;
+    if (try reader.peekByte() != 'd') return error.InvalidInfoValue;
+
+    var depth: usize = 0;
+    var end_index: usize = key_index + key.len;
+    while (reader.seek < reader.end) {
+        switch (try reader.takeByte()) {
+            'd', 'l' => {
+                depth += 1;
+                end_index += 1;
+            },
+            'e' => {
+                end_index += 1;
+                if (depth == 0) continue;
+
+                depth -= 1;
+            },
+            else => {
+                end_index += 1;
+            },
+        }
+    }
+
+    return reader.buffer[key_index..end_index];
 }
 
 test "Parse raw buffers to Value." {
